@@ -287,6 +287,16 @@
         `(progn ,@fbodies ,@body))))))
 
 (cl-defmethod incomplete--local-functions-1 (vars
+                                             (sexp (head cl-flet*)))
+  (pcase sexp
+    (`(,_ ,fbindings . ,body)
+     (let* ((fbodies nil))
+       (incomplete--local-functions-1
+        (nconc (mapcar #'car fbindings)
+               vars)
+        `(progn ,@fbodies ,@body))))))
+
+(cl-defmethod incomplete--local-functions-1 (vars
                                              (sexp (head cl-flet)))
   (incomplete--local-functions-1
    (nconc (mapcar #'car (cadr sexp))
