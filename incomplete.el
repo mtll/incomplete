@@ -32,7 +32,7 @@
   (require 'cl-lib))
 
 (defgroup incomplete nil
-  "Show let-binding values in Elisp completion."
+  "Better completion."
   :group 'lisp
   :prefix "incomplete-")
 
@@ -277,31 +277,19 @@
     res))
 
 (cl-defmethod incomplete--local-functions-1 (vars
-                                                 (sexp (head cl-labels)))
+                                             (sexp (head cl-labels)))
   (pcase sexp
     (`(,_ ,fbindings . ,body)
      (let* ((fbodies nil))
        (incomplete--local-functions-1
-        (nconc
-         (mapcar (lambda (binding)
-                   (cons (car binding)
-                         (car (pcase (cdr binding)
-                                (`(#',fn) `#',fn)
-                                (def
-                                 (car (push (cons 'lambda def) fbodies)))))))
-                 fbindings)
-         vars)
+        (nconc (mapcar #'car fbindings)
+               vars)
         `(progn ,@fbodies ,@body))))))
 
 (cl-defmethod incomplete--local-functions-1 (vars
-                                                 (sexp (head cl-flet)))
+                                             (sexp (head cl-flet)))
   (incomplete--local-functions-1
-   (nconc (mapcar (lambda (binding)
-                    (cons (car binding)
-                          (pcase (cdr binding)
-                            (`(#',fn) `#',fn)
-                            (def (cons 'lambda def)))))
-                  (cadr sexp))
+   (nconc (mapcar #'car (cadr sexp))
           vars)
    `(progn ,@(cddr sexp))))
 
@@ -362,29 +350,37 @@
                        #'incomplete--completion-local-symbols-advice)
            (funcall orig-fn))))
     (if (and result (listp result) (>= (length result) 3))
-        (let ((plist (drop 3 result)))
-          (when (plist-get plist :predicate)
-            (add-function :around (plist-get plist :predicate)
-                          (lambda (fn str)
-                            (or (stringp str)
-                                (funcall fn str)))))
-          (when (plist-get plist :company-kind)
-            (add-function :around (plist-get plist :company-kind)
-                          (lambda (fn str)
-                            (or (and (stringp str)
-                                     (get-text-property 0 'kind str))
-                                (funcall fn str)))))
-          (setf (plist-get plist :display-sort-function)
-                (lambda (cands)
-                  (let ((seen (make-hash-table :test #'equal))
-                        local other)
-                    (dolist (c cands)
-                      (unless (gethash c seen)
-                        (puthash c t seen)
-                        (if (get-text-property 0 'kind c)
-                            (push c local)
-                          (push c other))))
-                    (nconc (nreverse local) (nreverse other)))))
+        (let ((plist (drop 3 result))
+              (pred
+               (lambda (str)
+                 (and (stringp str)
+                      (get-text-property 0 'kind str))))
+              (sort
+               (lambda (cands)
+                 (let ((seen (make-hash-table :test #'equal))
+                       local other)
+                   (dolist (c cands)
+                     (unless (gethash c seen)
+                       (puthash c t seen)
+                       (if (get-text-property 0 'kind c)
+                           (push c local)
+                         (push c other))))
+                   (nconc (nreverse local) (nreverse other))))))
+          (if (plist-get plist :predicate)
+              (add-function :before-until
+                            (plist-get plist :predicate)
+                            pred)
+            (setf (plist-get plist :predicate) pred))
+          (if (plist-get plist :company-kind)
+              (add-function :before-until
+                            (plist-get plist :company-kind)
+                            pred)
+            (setf (plist-get plist :company-kind) pred))
+          (if (plist-get plist :display-sort-function)
+              (add-function :filter-return
+                            (plist-get plist :display-sort-function)
+                            sort)
+            (setf (plist-get plist :display-sort-function) sort))
           (append (take 3 result) plist))
       result)))
 
@@ -416,7 +412,7 @@
                  let
                  cl-type
                  radix-tree-leaf))
-  (function-put macro 'incomplete-safe-pcase-macro t))
+  (put macro 'incomplete-safe-pcase-macro t))
 
 ;;;###autoload
 (define-minor-mode incomplete-mode
