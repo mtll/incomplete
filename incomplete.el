@@ -44,12 +44,12 @@
            (static-if (<= 31 emacs-major-version)
                (elisp-scope-safe-macro-p (car sexp))
              (get (car sexp) 'safe-macro)))
-      (condition-case err
+      (condition-case _err
           (incomplete--local-variables-1
            vars
-           (let ((inhibit-message t)
-                 (macroexp-inhibit-compiler-macros t)
-                 (warning-minimum-log-level :emergency))
+           (dlet ((inhibit-message t)
+                  (macroexp-inhibit-compiler-macros t)
+                  (warning-minimum-log-level :emergency))
              (macroexpand-1 sexp)))
         (error (cl-call-next-method)))
     (cl-call-next-method)))
@@ -66,17 +66,13 @@
                      (let ((vars vars))
                        (when (eq 'let* (car sexp))
                          (dolist (binding (cdr (reverse bindings)))
-                           (push (cons (or (car-safe binding) binding)
-                                       (car (cdr-safe binding)))
-                                 vars)))
+                           (push (or (car-safe binding) binding) vars)))
                        (incomplete--local-variables-1
                         vars (car (cdr-safe (car (last bindings)))))))
                     (`(,(or 'let 'let*) ,bindings . ,body)
                      (let ((vars vars))
                        (dolist (binding bindings)
-                         (push (cons (or (car-safe binding) binding)
-                                     (car (cdr-safe binding)))
-                               vars))
+                         (push (or (car-safe binding) binding) vars))
                        (incomplete--local-variables-1 vars (car (last body)))))
                     (`(lambda ,_args)
                      ;; FIXME: Look for the witness inside `args'.
@@ -193,7 +189,7 @@
        (let ((pvars (incomplete--walk-pcase-pat vars pat)))
          (or (incomplete--local-variables-1 vars exp)
              (incomplete--local-variables-1 (nconc pvars vars)
-                                                `(progn ,@body)))))
+                                            `(progn ,@body)))))
       (_ (cl-call-next-method)))))
 
 ;; From `elisp--local-variables'
@@ -214,14 +210,13 @@
              (vars (funcall extract nil sexp)))
         (delete-dups
          (delq nil
-               (mapcar (lambda (form)
-                         (pcase-let (((or `(,var . ,val) var) form))
-                           (and (symbolp var)
-                                (not (string-match (symbol-name var) "\\`[&_]"))
-                                ;; Eliminate uninterned vars.
-                                (intern-soft var)
-                                (propertize (symbol-name var)
-                                            'kind (or kind 'text)))))
+               (mapcar (lambda (var)
+                         (and (symbolp var)
+                              (not (string-match (symbol-name var) "\\`[&_]"))
+                              ;; Eliminate uninterned vars.
+                              (intern-soft var)
+                              (propertize (symbol-name var)
+                                          'kind (or kind 'text))))
                        vars)))))))
 
 ;; From `elisp--local-variables-completion-table'
