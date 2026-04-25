@@ -394,11 +394,10 @@
                            (push c local)
                          (push c other))))
                    (nconc (nreverse local) (nreverse other))))))
-          (if (plist-get plist :predicate)
-              (add-function :before-until
-                            (plist-get plist :predicate)
-                            pred)
-            (setf (plist-get plist :predicate) pred))
+          (when (plist-get plist :predicate)
+            (add-function :before-until
+                          (plist-get plist :predicate)
+                          pred))
           (if (plist-get plist :company-kind)
               (add-function :before-until
                             (plist-get plist :company-kind)
