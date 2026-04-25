@@ -1,27 +1,35 @@
-;;; incomplete.el --- Better Elisp completion -*- lexical-binding: t -*-
-
+;;; incomplete.el --- More complete elisp completion -*- lexical-binding: t -*-
+;;
+;; Description: More complete elisp completion
 ;; Author: David Feller
 ;; Keywords: lisp, completion
-
-;; Package-Version: 0.0.1
+;; Version: 0.0.1
 ;; Package-Requires: ((emacs "30"))
-
+;;
 ;; This file is not part of GNU Emacs.
-
+;;
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
 ;; the Free Software Foundation, either version 3 of the License, or
 ;; (at your option) any later version.
-
+;;
 ;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ;; GNU General Public License for more details.
-
+;;
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
+
+;; A hack to make elisp completion a bit smarter about dealing with
+;; potentially unsafe macroexpansion.  Always expand macros that are
+;; marked as safe and mark some built in macros as safe.  For macros
+;; that cannot be safely expanded a pair of generic functions,
+;; `incomplete--local-variables-1' and
+;; `incomplete--local-functions-1', are defined so that methods can be
+;; added "manually" expand the macro in a safe way.
 
 ;;; Code:
 
@@ -56,7 +64,6 @@
 
 ;; From `elisp--local-variables-1'
 (cl-defmethod incomplete--local-variables-1 (vars sexp)
-  "Return VARS locally bound around the witness, or nil if not found."
   (let (res)
     (while
         (unless
@@ -192,6 +199,10 @@
                                             `(progn ,@body)))))
       (_ (cl-call-next-method)))))
 
+(cl-defmethod incomplete--local-variables-1 (vars
+                                             (sexp (head cl-symbol-macrolet)))
+  (incomplete--local-variables-1 vars `(let ,(cadr sexp) ,@(cddr sexp))))
+
 ;; From `elisp--local-variables'
 (defun incomplete--local-variables (extract kind)
   (save-excursion
@@ -298,6 +309,13 @@
 
 (cl-defmethod incomplete--local-functions-1 (vars
                                              (sexp (head cl-flet)))
+  (incomplete--local-functions-1
+   (nconc (mapcar #'car (cadr sexp))
+          vars)
+   `(progn ,@(cddr sexp))))
+
+(cl-defmethod incomplete--local-functions-1 (vars
+                                             (sexp (head cl-defmacro)))
   (incomplete--local-functions-1
    (nconc (mapcar #'car (cadr sexp))
           vars)
