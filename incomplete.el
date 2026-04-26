@@ -46,92 +46,93 @@
 
 (cl-defgeneric incomplete--local-variables-1 (vars sexp))
 
-(cl-defmethod incomplete--local-variables-1 :around (vars sexp)
-  (if (and (consp sexp)
-           (symbolp (car sexp))
-           (static-if (<= 31 emacs-major-version)
-               (elisp-scope-safe-macro-p (car sexp))
-             (get (car sexp) 'safe-macro)))
-      (condition-case _err
-          (incomplete--local-variables-1
-           vars
-           (dlet ((inhibit-message t)
-                  (macroexp-inhibit-compiler-macros t)
-                  (warning-minimum-log-level :emergency))
-             (macroexpand-1 sexp)))
-        (error (cl-call-next-method)))
-    (cl-call-next-method)))
-
 ;; From `elisp--local-variables-1'
 (cl-defmethod incomplete--local-variables-1 (vars sexp)
-  (let (res)
-    (while
-        (unless
-            (setq res
-                  (pcase sexp
-                    (`(,(or 'let 'let*) ,bindings)
-                     (let ((vars vars))
-                       (when (eq 'let* (car sexp))
-                         (dolist (binding (cdr (reverse bindings)))
-                           (push (or (car-safe binding) binding) vars)))
-                       (incomplete--local-variables-1
-                        vars (car (cdr-safe (car (last bindings)))))))
-                    (`(,(or 'let 'let*) ,bindings . ,body)
-                     (let ((vars vars))
-                       (dolist (binding bindings)
-                         (push (or (car-safe binding) binding) vars))
-                       (incomplete--local-variables-1 vars (car (last body)))))
-                    (`(lambda ,_args)
-                     ;; FIXME: Look for the witness inside `args'.
-                     (setq sexp nil))
-                    (`(lambda ,args . ,body)
-                     (incomplete--local-variables-1
-                      (let ((args (if (listp args) args)))
-                        ;; FIXME: Exit the loop if witness is in args.
-                        (append (remq '&optional (remq '&rest args)) vars))
-                      (car (last body))))
-                    (`(condition-case ,_ ,e) (incomplete--local-variables-1 vars e))
-                    (`(condition-case ,v ,_ . ,catches)
-                     (incomplete--local-variables-1
-                      (cons v vars) (cdr (car (last catches)))))
-                    (`(quote . ,_)
-                     ;; FIXME: Look for the witness inside sexp.
-                     (setq sexp nil))
-                    (`(,(or 'with-slots 'cl-with-accessors)
-                       ,spec-list ,_obj . ,body)
-                     (incomplete--local-variables-1 vars `(let ,spec-list ,@body)))
-                    (`(,(or 'dlet 'cl-symbol-macrolet) . ,_)
-                     (incomplete--local-variables-1 vars (cons 'let (cdr sexp))))
-                    (`(,(or 'when-let* 'and-let* 'while-let) . ,_)
-                     (incomplete--local-variables-1 vars (cons 'let* (cdr sexp))))
-                    (`(if-let* ,bindings ,then . ,else)
-                     (or (incomplete--local-variables-1 vars `(let* ,bindings ,then))
-                         (incomplete--local-variables-1 vars `(progn ,@else))))
-                    (`(cl-letf ,bindings . ,body)
-                     (incomplete--local-variables-1
-                      vars `(let ,(seq-filter (lambda (b) (symbolp (car b))) bindings)
-                              ,@body)))
-                    (`(cl-letf* ,bindings . ,body)
-                     (incomplete--local-variables-1
-                      vars `(let* ,(seq-filter (lambda (b) (symbolp (car b))) bindings)
-                              ,@body)))
-                    (`(letrec ,bindings . ,body)
-                     (let (lvars exps)
-                       (pcase-dolist (`(,var ,exp) bindings)
-                         (push var lvars)
-                         (push exp exps))
-                       (incomplete--local-variables-1 vars `(let ,lvars
-                                                              ,@exps
-                                                              ,@body))))
-                    ;; FIXME: Handle `cond'.
-                    (`(,_ . ,_)
-                     (incomplete--local-variables-1 vars (car (last sexp))))
-                    ('elisp--witness--lisp (or vars '(nil)))
-                    (_ nil)))
-          ;; We didn't find the witness in the last element so we try to
-          ;; backtrack to the last-but-one.
-          (setq sexp (ignore-errors (butlast sexp)))))
-    res))
+  (let* ((expand
+          (and (consp sexp)
+               (symbolp (car sexp))
+               (macrop (car sexp))
+               (static-if (<= 31 emacs-major-version)
+                   (elisp-scope-safe-macro-p (car sexp))
+                 (get (car sexp) 'safe-macro))))
+         (expanded
+          (and expand
+               (condition-case _
+                   (dlet ((inhibit-message t)
+                          (macroexp-inhibit-compiler-macros t)
+                          (warning-minimum-log-level :emergency))
+                     (macroexpand-1 sexp))
+                 (error (setq expand nil))))))
+    (if expand
+        (incomplete--local-variables-1 vars expanded)
+      (let (res)
+        (while
+            (unless
+                (setq res
+                      (pcase sexp
+                        (`(,(or 'let 'let*) ,bindings)
+                         (let ((vars vars))
+                           (when (eq 'let* (car sexp))
+                             (dolist (binding (cdr (reverse bindings)))
+                               (push (or (car-safe binding) binding) vars)))
+                           (incomplete--local-variables-1
+                            vars (car (cdr-safe (car (last bindings)))))))
+                        (`(,(or 'let 'let*) ,bindings . ,body)
+                         (let ((vars vars))
+                           (dolist (binding bindings)
+                             (push (or (car-safe binding) binding) vars))
+                           (incomplete--local-variables-1 vars (car (last body)))))
+                        (`(lambda ,_args)
+                         ;; FIXME: Look for the witness inside `args'.
+                         (setq sexp nil))
+                        (`(lambda ,args . ,body)
+                         (incomplete--local-variables-1
+                          (let ((args (if (listp args) args)))
+                            ;; FIXME: Exit the loop if witness is in args.
+                            (append (remq '&optional (remq '&rest args)) vars))
+                          (car (last body))))
+                        (`(condition-case ,_ ,e) (incomplete--local-variables-1 vars e))
+                        (`(condition-case ,v ,_ . ,catches)
+                         (incomplete--local-variables-1
+                          (cons v vars) (cdr (car (last catches)))))
+                        (`(quote . ,_)
+                         ;; FIXME: Look for the witness inside sexp.
+                         (setq sexp nil))
+                        (`(,(or 'with-slots 'cl-with-accessors)
+                           ,spec-list ,_obj . ,body)
+                         (incomplete--local-variables-1 vars `(let ,spec-list ,@body)))
+                        (`(,(or 'dlet 'cl-symbol-macrolet) . ,_)
+                         (incomplete--local-variables-1 vars (cons 'let (cdr sexp))))
+                        (`(,(or 'when-let* 'and-let* 'while-let) . ,_)
+                         (incomplete--local-variables-1 vars (cons 'let* (cdr sexp))))
+                        (`(if-let* ,bindings ,then . ,else)
+                         (or (incomplete--local-variables-1 vars `(let* ,bindings ,then))
+                             (incomplete--local-variables-1 vars `(progn ,@else))))
+                        (`(cl-letf ,bindings . ,body)
+                         (incomplete--local-variables-1
+                          vars `(let ,(seq-filter (lambda (b) (symbolp (car b))) bindings)
+                                  ,@body)))
+                        (`(cl-letf* ,bindings . ,body)
+                         (incomplete--local-variables-1
+                          vars `(let* ,(seq-filter (lambda (b) (symbolp (car b))) bindings)
+                                  ,@body)))
+                        (`(letrec ,bindings . ,body)
+                         (let (lvars exps)
+                           (pcase-dolist (`(,var ,exp) bindings)
+                             (push var lvars)
+                             (push exp exps))
+                           (incomplete--local-variables-1 vars `(let ,lvars
+                                                                  ,@exps
+                                                                  ,@body))))
+                        ;; FIXME: Handle `cond'.
+                        (`(,_ . ,_)
+                         (incomplete--local-variables-1 vars (car (last sexp))))
+                        ('elisp--witness--lisp (or vars '(nil)))
+                        (_ nil)))
+              ;; We didn't find the witness in the last element so we try to
+              ;; backtrack to the last-but-one.
+              (setq sexp (ignore-errors (butlast sexp)))))
+        res))))
 
 (defun incomplete--walk-pcase-pat (vars pat)
   (let ((pat (pcase--macroexpand pat))
@@ -310,15 +311,13 @@
 (cl-defmethod incomplete--local-functions-1 (vars
                                              (sexp (head cl-flet)))
   (incomplete--local-functions-1
-   (nconc (mapcar #'car (cadr sexp))
-          vars)
+   (nconc (mapcar #'car (cadr sexp)) vars)
    `(progn ,@(cddr sexp))))
 
 (cl-defmethod incomplete--local-functions-1 (vars
                                              (sexp (head cl-defmacro)))
   (incomplete--local-functions-1
-   (nconc (mapcar #'car (cadr sexp))
-          vars)
+   (nconc (mapcar #'car (cadr sexp)) vars)
    `(progn ,@(cddr sexp))))
 
 (defconst incomplete--local-functions-completion-table
@@ -342,32 +341,16 @@
        lastvars))))
 
 (defun incomplete--completion-local-symbols-advice (table)
-  (let ((tables
-         (list incomplete--local-functions-completion-table
-               table)))
+  (let ((new-table (completion-table-merge
+                    incomplete--local-functions-completion-table
+                    table)))
     (lambda (string pred action)
-      (add-function :before-until (var pred)
-                    (lambda (val) (stringp val)))
-      (cond
-       ((null action)
-        (let ((retvals (mapcar (lambda (table)
-                                 (try-completion string table pred))
-                               tables)))
-          (if (member string retvals)
-              string
-            (try-completion string
-                            (mapcar (lambda (value)
-                                      (if (eq value t) string value))
-                                    (delq nil retvals))
-                            pred))))
-       ((eq action t)
-        (apply #'append (mapcar (lambda (table)
-                                  (all-completions string table pred))
-                                tables)))
-       (t
-        (seq-some (lambda (table)
-                    (complete-with-action action table string pred))
-                  tables))))))
+      (funcall new-table
+               string
+               (lambda (val)
+                 (or (stringp val)
+                     (funcall pred val)))
+               action))))
 
 (defun incomplete--completion-advice (orig-fn)
   (let ((result
@@ -376,38 +359,18 @@
                     incomplete--local-variables-completion-table))
            (advice-add 'elisp--completion-local-symbols :filter-return
                        #'incomplete--completion-local-symbols-advice)
-           (funcall orig-fn))))
+           (funcall orig-fn)))
+        (kind
+         (lambda (str)
+           (and (stringp str)
+                (get-text-property 0 'kind str)))))
     (if (and result (listp result) (>= (length result) 3))
-        (let ((plist (drop 3 result))
-              (pred
-               (lambda (str)
-                 (and (stringp str)
-                      (get-text-property 0 'kind str))))
-              (sort
-               (lambda (cands)
-                 (let ((seen (make-hash-table :test #'equal))
-                       local other)
-                   (dolist (c cands)
-                     (unless (gethash c seen)
-                       (puthash c t seen)
-                       (if (get-text-property 0 'kind c)
-                           (push c local)
-                         (push c other))))
-                   (nconc (nreverse local) (nreverse other))))))
-          (when (plist-get plist :predicate)
-            (add-function :before-until
-                          (plist-get plist :predicate)
-                          pred))
+        (let ((plist (drop 3 result)))
           (if (plist-get plist :company-kind)
               (add-function :before-until
                             (plist-get plist :company-kind)
-                            pred)
-            (setf (plist-get plist :company-kind) pred))
-          (if (plist-get plist :display-sort-function)
-              (add-function :filter-return
-                            (plist-get plist :display-sort-function)
-                            sort)
-            (setf (plist-get plist :display-sort-function) sort))
+                            kind)
+            (setf (plist-get plist :company-kind) kind))
           (append (take 3 result) plist))
       result)))
 
